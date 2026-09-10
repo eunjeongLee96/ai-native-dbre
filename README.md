@@ -22,22 +22,25 @@ This lab explores how AI agents can safely understand, observe, diagnose, and in
 >
 > The goal is to design controlled, observable, least-privilege interfaces that allow AI agents to work with database systems safely.
 
-## Learning Path
+## AI-Native DBRE Architecture
 
 ```text
-PostgreSQL
-    ↓
-pgvector
-    ↓
-RAG
-    ↓
-AI Agent ── Tool / MCP ── Database
-    ↓
-Guardrails / Human Approval / Audit
-    ↓
-Observability
-    ↓
-CloudNativePG / Kubernetes
+Bespin Global HelpNow / Foundry
+              │
+              ▼
+       AI-Native DBRE Agent
+              │
+      ┌───────┼──────────┐
+      ▼       ▼          ▼
+   DB Tools   RAG     Guardrails
+      │       │          │
+      ▼       ▼          │
+ PostgreSQL  pgvector    │
+ MySQL/RDS               │
+      │                  │
+      └────────┬─────────┘
+               ▼
+     Observability / Cloud Native
 ```
 
 ## Repository Structure
