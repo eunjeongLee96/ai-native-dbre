@@ -14,6 +14,7 @@ This lab explores how AI agents can safely understand, observe, diagnose, and in
 - Security, guardrails, and human approval
 - Observability for agent-driven DB operations
 - CloudNativePG and Kubernetes fundamentals
+- Graph DB exploration for fraud transaction networks
 - HelpNow Foundry as the enterprise agent platform used for selected experiments
 
 ## Guiding Principle
@@ -54,6 +55,8 @@ ai-native-dbre/
 ├── vector/
 │   ├── pgvector-lab/
 │   └── rag-lab/
+├── graph/
+│   └── fraud-transaction-network/
 ├── agent/
 │   ├── db-tools/
 │   ├── prompts/
@@ -63,6 +66,22 @@ ai-native-dbre/
 └── cloud-native/
     └── cnpg/
 ```
+
+## Separate Lab: Graph DB / Fraud Transaction Network
+
+After the pgvector/vector-search exercises, a separate graph database lab will reuse the account-to-account transaction data from the existing GAT/GATv2 fraud detection experiments.
+
+```text
+Graph DB / Fraud Transaction Network
+├── Account nodes
+├── Transaction edges
+├── fraud label
+├── amount / timestamp
+├── degree / community
+└── path / neighborhood exploration
+```
+
+The purpose is to explore relationship-oriented questions such as direct neighbors, multi-hop transaction paths, and neighborhoods around fraud-labeled accounts. Graph DB exploration will remain separate from vector similarity search, while a future extension may connect GAT-generated node embeddings to pgvector.
 
 ## Project Goal
 
