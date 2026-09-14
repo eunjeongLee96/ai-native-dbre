@@ -4,72 +4,7 @@ PostgreSQL + pgvector hands-on lab for vector storage, similarity search, indexi
 
 ## Phase 1 Status — Completed
 
-Phase 1 is complete. The lab covered vector storage, L2/Cosine similarity search, HNSW and IVFFlat ANN indexes, and an execution-time comparison on 100,000 vectors.
-
-## Performance Benchmark
-
-The final experiment compared the same Cosine Top-K query under normal PostgreSQL planner settings (`enable_seqscan = on`).
-
-```text
-100,000 rows
-      ↓
-No Index measurement
-      ↓
-Create HNSW → measurement
-      ↓
-Drop HNSW
-      ↓
-Create IVFFlat → measurement
-```
-
-### Benchmark setup
-
-- Dataset: 100,000 random `vector(3)` rows
-- Distance: Cosine (`<=>`)
-- Query vector: `[0.5,0.5,0.5]`
-- Top-K: 10
-- Planner: normal settings (`enable_seqscan = on`)
-- IVFFlat: `lists = 100`, `probes = 10`
-
-Benchmark query:
-
-```sql
-EXPLAIN ANALYZE SELECT id, embedding <=> '[0.5,0.5,0.5]' AS distance FROM items_bench ORDER BY embedding <=> '[0.5,0.5,0.5]' LIMIT 10;
-```
-
-### Results
-
-| Search method | Access path | Execution Time | Relative to No Index |
-|---|---|---:|---:|
-| No Index | Seq Scan + top-N heapsort | 31.350 ms | 1.0x |
-| HNSW | HNSW Index Scan | 2.244 ms | ~14.0x faster |
-| IVFFlat (`lists=100`, `probes=10`) | IVFFlat Index Scan | 5.325 ms | ~5.9x faster |
-
-Observed execution paths:
-
-```text
-No Index
-Seq Scan (100,000 rows)
-    ↓
-top-N heapsort
-    ↓
-LIMIT 10
-Execution Time: 31.350 ms
-
-HNSW
-Index Scan using idx01_items_bench_hnsw_cosine
-    ↓
-LIMIT 10
-Execution Time: 2.244 ms
-
-IVFFlat
-Index Scan using idx02_items_bench_ivfflat_cosine
-    ↓
-LIMIT 10
-Execution Time: 5.325 ms
-```
-
-Under this benchmark configuration, both ANN indexes reduced Top-K search time substantially compared with the no-index scan. HNSW was the fastest in this specific 100,000-row, 3-dimensional test. These timings are experiment-specific and should not be generalized across different vector dimensions, dataset sizes, hardware, or ANN tuning parameters.
+Phase 1 is complete. The lab covered vector storage, L2/Cosine similarity search, HNSW and IVFFlat ANN indexes, and a 100,000-row execution-time benchmark.
 
 ## Current Progress
 
@@ -118,8 +53,6 @@ The `big_apple` row is intentionally much larger than `apple` while pointing in 
 
 ## 4. L2 Distance
 
-pgvector operator:
-
 ```text
 <-> = L2 (Euclidean) distance
 ```
@@ -128,13 +61,9 @@ pgvector operator:
 SELECT name, embedding <-> '[1,0,0]' AS l2_distance FROM items ORDER BY embedding <-> '[1,0,0]';
 ```
 
-L2 distance measures the actual geometric distance between vectors, so vector magnitude affects the result.
-
-For example, `[1,0,0]` and `[10,0,0]` point in the same direction but have an L2 distance of `9`.
+L2 distance measures geometric distance, so vector magnitude affects the result. `[1,0,0]` and `[10,0,0]` have an L2 distance of `9`.
 
 ## 5. Cosine Distance
-
-pgvector operator:
 
 ```text
 <=> = cosine distance
@@ -144,23 +73,19 @@ pgvector operator:
 SELECT name, embedding <=> '[1,0,0]' AS cosine_distance FROM items ORDER BY embedding <=> '[1,0,0]';
 ```
 
-Cosine distance focuses on direction rather than magnitude.
-
 ```text
 cosine distance = 1 - cosine similarity
 ```
-
-Therefore:
 
 - cosine distance `0` = same direction
 - cosine distance `1` = perpendicular
 - cosine distance `2` = opposite direction
 
-`[1,0,0]` and `[10,0,0]` have cosine distance `0` because they point in exactly the same direction.
+`[1,0,0]` and `[10,0,0]` have cosine distance `0` because they point in the same direction.
 
 ## 6. Basic Vector Similarity Search
 
-A Top-K vector search calculates distance from the query vector, orders by distance, and returns the nearest K rows.
+A Top-K vector search calculates distance, orders by distance, and returns the nearest K rows.
 
 ```sql
 SELECT name, embedding, embedding <=> '[1,0,0]' AS distance FROM items ORDER BY embedding <=> '[1,0,0]' LIMIT 2;
@@ -172,7 +97,7 @@ Core pattern:
 ORDER BY embedding <=> query_vector LIMIT K
 ```
 
-A threshold search filters by a maximum acceptable distance:
+Threshold search:
 
 ```sql
 SELECT name, embedding <=> '[1,0,0]' AS distance FROM items WHERE embedding <=> '[1,0,0]' < 0.1 ORDER BY embedding <=> '[1,0,0]';
@@ -180,44 +105,32 @@ SELECT name, embedding <=> '[1,0,0]' AS distance FROM items WHERE embedding <=> 
 
 ## 7. HNSW Index
 
-HNSW is an ANN index for nearest-neighbor search over vector data. HNSW stands for `Hierarchical Navigable Small World` and organizes vectors using graph-like neighbor connections, navigating promising neighbors during search rather than exhaustively comparing all vectors.
-
-```text
-Query -> navigate promising neighbors -> Top-K candidates
-```
+HNSW is an ANN index for nearest-neighbor search over vector data. It uses graph-like neighbor connections and navigates promising candidates during search.
 
 ### Distance operator classes
 
-HNSW is the index structure, while the operator class defines how vector closeness is measured.
-
 | Metric | Operator | HNSW operator class |
 |---|---|---|
-| L2 (Euclidean) distance | `<->` | `vector_l2_ops` |
+| L2 | `<->` | `vector_l2_ops` |
 | Inner Product | `<#>` | `vector_ip_ops` |
-| Cosine distance | `<=>` | `vector_cosine_ops` |
-| L1 (Manhattan) distance | `<+>` | `vector_l1_ops` |
+| Cosine | `<=>` | `vector_cosine_ops` |
+| L1 | `<+>` | `vector_l1_ops` |
 
 This lab focuses on Cosine and L2.
-
-### Create Cosine and L2 HNSW indexes
 
 ```sql
 CREATE INDEX item_embedding_hnsw_cosine_idx ON items USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX item_embedding_hnsw_l2_idx ON items USING hnsw (embedding vector_l2_ops);
 ```
 
-### Execution plan verification
+The four-row sample was too small for meaningful performance comparison, so index access paths were verified functionally before moving to the larger benchmark.
 
-The sample dataset is intentionally minimal, so `enable_seqscan = off` was used only to verify index access paths. Performance benchmarking was performed separately with 100,000 vectors under normal planner settings.
-
-Cosine:
+Observed access paths:
 
 ```text
 Index Scan using item_embedding_hnsw_cosine_idx
 Order By: (embedding <=> '[1,0,0]'::vector)
 ```
-
-L2:
 
 ```text
 Index Scan using item_embedding_hnsw_l2_idx
@@ -226,7 +139,7 @@ Order By: (embedding <-> '[1,0,0]'::vector)
 
 ## 8. IVFFlat Index
 
-IVFFlat is also an ANN vector index, but uses a partitioned search strategy rather than HNSW's graph navigation.
+IVFFlat is also an ANN vector index, but uses partition-based search rather than graph traversal.
 
 ```text
 All vectors
@@ -247,22 +160,16 @@ lists  = number of vector partitions
 probes = number of partitions searched per query
 ```
 
-Fewer probes reduce search work; more probes generally improve recall at additional search cost.
-
-### Create Cosine and L2 IVFFlat indexes
-
 ```sql
 CREATE INDEX item_embedding_ivfflat_cosine_idx ON items USING ivfflat (embedding vector_cosine_ops) WITH (lists = 2);
 CREATE INDEX item_embedding_ivfflat_l2_idx ON items USING ivfflat (embedding vector_l2_ops) WITH (lists = 2);
 ```
 
-Search configuration used in the functional lab:
-
 ```sql
 SET ivfflat.probes = 1;
 ```
 
-`ivfflat.probes` controls how many IVFFlat lists are searched for each query. In this lab the index was created with `lists = 2`, and `probes = 1` means that a query searches one of those lists. Increasing `probes` searches more partitions and can improve recall, at the cost of additional search work.
+`ivfflat.probes` controls how many IVFFlat lists are searched for each query.
 
 ```text
 lists = 2, probes = 1
@@ -279,6 +186,137 @@ lists = 2, probes = 1
 | ANN | Yes | Yes |
 | Main search tuning | `ef_search` | `probes` |
 | Main build/layout tuning | graph parameters | `lists` |
+
+## 9. Performance Benchmark — 100,000 Vectors
+
+After the four-row functional tests, a separate benchmark table was created with 100,000 random vectors. The performance test was then run under normal PostgreSQL planner behavior without forcing an access path.
+
+### Create benchmark dataset
+
+```sql
+CREATE TABLE items_bench (id bigserial PRIMARY KEY, embedding vector(3));
+```
+
+```sql
+INSERT INTO items_bench (embedding) SELECT ARRAY[random(), random(), random()]::vector FROM generate_series(1,100000);
+```
+
+```sql
+SELECT count(*) FROM items_bench;
+```
+
+Expected row count:
+
+```text
+100000
+```
+
+### Benchmark flow
+
+```text
+100,000 rows
+      ↓
+No Index measurement
+      ↓
+Create HNSW → measurement
+      ↓
+Drop HNSW
+      ↓
+Create IVFFlat → measurement
+```
+
+The same Cosine Top-K query was used for every measurement:
+
+```sql
+EXPLAIN ANALYZE SELECT id, embedding <=> '[0.5,0.5,0.5]' AS distance FROM items_bench ORDER BY embedding <=> '[0.5,0.5,0.5]' LIMIT 10;
+```
+
+Benchmark conditions:
+
+- Dataset: 100,000 random `vector(3)` rows
+- Distance: Cosine (`<=>`)
+- Query vector: `[0.5,0.5,0.5]`
+- Top-K: 10
+- PostgreSQL planner: normal behavior, no forced scan path
+- IVFFlat benchmark: `lists = 100`, `probes = 10`
+
+### No Index
+
+Observed execution path:
+
+```text
+Seq Scan on items_bench (100,000 rows)
+    ↓
+top-N heapsort
+    ↓
+LIMIT 10
+```
+
+Execution Time:
+
+```text
+31.350 ms
+```
+
+### HNSW
+
+```sql
+CREATE INDEX idx01_items_bench_hnsw_cosine ON items_bench USING hnsw (embedding vector_cosine_ops);
+```
+
+Observed execution path:
+
+```text
+Index Scan using idx01_items_bench_hnsw_cosine
+    ↓
+LIMIT 10
+```
+
+Execution Time:
+
+```text
+2.244 ms
+```
+
+### IVFFlat
+
+After the HNSW measurement, the HNSW index was removed before testing IVFFlat.
+
+```sql
+DROP INDEX idx01_items_bench_hnsw_cosine;
+```
+
+```sql
+CREATE INDEX idx02_items_bench_ivfflat_cosine ON items_bench USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+```
+
+```sql
+SET ivfflat.probes = 10;
+```
+
+Observed execution path:
+
+```text
+Index Scan using idx02_items_bench_ivfflat_cosine
+    ↓
+LIMIT 10
+```
+
+Execution Time:
+
+```text
+5.325 ms
+```
+
+### Results
+
+| Search method | Access path | Execution Time | Relative to No Index |
+|---|---|---:|---:|
+| No Index | Seq Scan + top-N heapsort | 31.350 ms | 1.0x |
+| HNSW | HNSW Index Scan | 2.244 ms | ~14.0x faster |
+| IVFFlat (`lists=100`, `probes=10`) | IVFFlat Index Scan | 5.325 ms | ~5.9x faster |
+
+Under this benchmark configuration, both ANN indexes reduced Top-K search time substantially compared with the no-index scan. HNSW was the fastest in this specific 100,000-row, 3-dimensional experiment. These timings are experiment-specific and should not be generalized across different vector dimensions, dataset sizes, hardware, or ANN tuning parameters.
 
 ## Key Takeaways
 
