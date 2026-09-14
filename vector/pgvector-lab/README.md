@@ -115,6 +115,83 @@ A threshold search is different. It filters by a maximum acceptable distance:
 SELECT name, embedding <=> '[1,0,0]' AS distance FROM items WHERE embedding <=> '[1,0,0]' < 0.1 ORDER BY embedding <=> '[1,0,0]';
 ```
 
+## 7. HNSW Index - Concept
+
+HNSW is a special index designed for nearest-neighbor search over vector data.
+
+> **HNSW = a vector-column ANN index.**
+>
+> **B-tree is mainly for equality/range search, while HNSW is for nearest-neighbor search.**
+
+### Why is a separate vector index needed?
+
+A normal PostgreSQL B-tree index is well suited to queries such as:
+
+```sql
+WHERE id = 100
+WHERE created_at > ...
+```
+
+Vector search asks a different question:
+
+```text
+"Find the 10 vectors nearest to this query vector."
+```
+
+Without a vector index, PostgreSQL can calculate the distance between the query vector and stored vectors, sort the results, and return the Top-K. As the number of vectors grows, comparing against many rows becomes expensive.
+
+HNSW provides an index structure designed specifically for this nearest-neighbor problem.
+
+### HNSW
+
+HNSW stands for:
+
+```text
+Hierarchical Navigable Small World
+```
+
+Conceptually, it organizes vectors as a graph-like structure in which nearby vectors are connected. During a search, it navigates promising neighbors instead of exhaustively comparing every stored vector.
+
+```text
+Full comparison
+Query -> compare many/all vectors -> sort -> Top-K
+
+HNSW
+Query -> navigate promising neighbors -> Top-K candidates
+```
+
+HNSW is an **ANN (Approximate Nearest Neighbor)** index. The goal is to obtain very good nearest-neighbor results much faster at large scale, with a trade-off between search speed and recall.
+
+### Distance metric and operator class
+
+The HNSW index must be created for the distance metric used by the search.
+
+Cosine distance:
+
+```sql
+CREATE INDEX items_embedding_hnsw_cosine_idx ON items USING hnsw (embedding vector_cosine_ops);
+```
+
+Used with:
+
+```sql
+ORDER BY embedding <=> query_vector
+```
+
+L2 distance:
+
+```sql
+CREATE INDEX items_embedding_hnsw_l2_idx ON items USING hnsw (embedding vector_l2_ops);
+```
+
+Used with:
+
+```sql
+ORDER BY embedding <-> query_vector
+```
+
+The actual HNSW index creation/search experiment is the next lab step. The current `items` table is very small, so it is not suitable for demonstrating a meaningful performance improvement yet.
+
 ## Key Takeaways
 
 ### L2 vs Cosine
@@ -140,8 +217,15 @@ LIMIT K
 Top-K nearest vectors
 ```
 
+### Index mental model
+
+```text
+B-tree -> equality / range search
+HNSW   -> nearest-neighbor vector search
+```
+
 This pattern will later be used in RAG to retrieve the most relevant document chunks for a question.
 
 ## Next
 
-HNSW index creation and search.
+Create the HNSW index, run vector searches, and inspect the execution plan with `EXPLAIN`.
