@@ -199,6 +199,14 @@ Search configuration used in the lab:
 SET ivfflat.probes = 1;
 ```
 
+`ivfflat.probes` controls how many IVFFlat lists are searched for each query. In this lab the index was created with `lists = 2`, and `probes = 1` means that a query searches one of those lists. Increasing `probes` searches more partitions and can improve recall, at the cost of additional search work.
+
+```text
+lists = 2, probes = 1
+-> divide the vector space into 2 lists
+-> search 1 list per query
+```
+
 ### Execution plan verification
 
 As with HNSW, `enable_seqscan = off` was used only to verify the expected index access paths on the minimal sample dataset.
