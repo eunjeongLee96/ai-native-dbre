@@ -2,6 +2,24 @@
 
 PostgreSQL + pgvector hands-on lab for vector storage, similarity search, indexing, and performance experiments.
 
+## Performance Benchmark Plan
+
+The final Phase 1 experiment will compare vector search performance on a larger dataset using the same Top-K query.
+
+```text
+100,000 rows
+      ↓
+No Index measurement
+      ↓
+Create HNSW → measurement
+      ↓
+Drop HNSW
+      ↓
+Create IVFFlat → measurement
+```
+
+HNSW and IVFFlat will be tested sequentially so that each execution plan and execution time can be compared clearly under the same query conditions. The measured results will be added after the experiment.
+
 ## Current Progress
 
 - [x] PostgreSQL + pgvector lab environment
