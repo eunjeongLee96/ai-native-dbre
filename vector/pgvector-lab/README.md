@@ -162,9 +162,33 @@ Query -> navigate promising neighbors -> Top-K candidates
 
 HNSW is an **ANN (Approximate Nearest Neighbor)** index. The goal is to obtain very good nearest-neighbor results much faster at large scale, with a trade-off between search speed and recall.
 
-### Distance metric and operator class
+### HNSW is not limited to Cosine and L2
 
-The HNSW index must be created for the distance metric used by the search.
+HNSW is the **index structure**, while the operator class defines **how vector closeness is measured**. Cosine and L2 are only the two metrics used first in this lab.
+
+For pgvector's `vector` type, HNSW supports these main distance/operator classes:
+
+| Metric | Operator | HNSW operator class |
+|---|---|---|
+| L2 (Euclidean) distance | `<->` | `vector_l2_ops` |
+| Inner Product | `<#>` | `vector_ip_ops` |
+| Cosine distance | `<=>` | `vector_cosine_ops` |
+| L1 (Manhattan) distance | `<+>` | `vector_l1_ops` |
+
+Mental model:
+
+```text
+HNSW = How to search nearest neighbors efficiently
+
+        + L2              -> vector_l2_ops
+        + Cosine          -> vector_cosine_ops
+        + Inner Product   -> vector_ip_ops
+        + L1              -> vector_l1_ops
+```
+
+The lab will focus on **Cosine and L2** rather than expanding into every metric. Inner Product and L1 are documented here to make it clear that HNSW itself is not a Cosine/L2-only index.
+
+### Distance metric and operator class examples
 
 Cosine distance:
 
