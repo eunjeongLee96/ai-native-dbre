@@ -2,9 +2,13 @@
 
 PostgreSQL + pgvector hands-on lab for vector storage, similarity search, indexing, and performance experiments.
 
-## Performance Benchmark Plan
+## Phase 1 Status — Completed
 
-The final Phase 1 experiment will compare vector search performance on a larger dataset using the same Top-K query.
+Phase 1 is complete. The lab covered vector storage, L2/Cosine similarity search, HNSW and IVFFlat ANN indexes, and an execution-time comparison on 100,000 vectors.
+
+## Performance Benchmark
+
+The final experiment compared the same Cosine Top-K query under normal PostgreSQL planner settings (`enable_seqscan = on`).
 
 ```text
 100,000 rows
@@ -18,7 +22,54 @@ Drop HNSW
 Create IVFFlat → measurement
 ```
 
-HNSW and IVFFlat will be tested sequentially so that each execution plan and execution time can be compared clearly under the same query conditions. The measured results will be added after the experiment.
+### Benchmark setup
+
+- Dataset: 100,000 random `vector(3)` rows
+- Distance: Cosine (`<=>`)
+- Query vector: `[0.5,0.5,0.5]`
+- Top-K: 10
+- Planner: normal settings (`enable_seqscan = on`)
+- IVFFlat: `lists = 100`, `probes = 10`
+
+Benchmark query:
+
+```sql
+EXPLAIN ANALYZE SELECT id, embedding <=> '[0.5,0.5,0.5]' AS distance FROM items_bench ORDER BY embedding <=> '[0.5,0.5,0.5]' LIMIT 10;
+```
+
+### Results
+
+| Search method | Access path | Execution Time | Relative to No Index |
+|---|---|---:|---:|
+| No Index | Seq Scan + top-N heapsort | 31.350 ms | 1.0x |
+| HNSW | HNSW Index Scan | 2.244 ms | ~14.0x faster |
+| IVFFlat (`lists=100`, `probes=10`) | IVFFlat Index Scan | 5.325 ms | ~5.9x faster |
+
+Observed execution paths:
+
+```text
+No Index
+Seq Scan (100,000 rows)
+    ↓
+top-N heapsort
+    ↓
+LIMIT 10
+Execution Time: 31.350 ms
+
+HNSW
+Index Scan using idx01_items_bench_hnsw_cosine
+    ↓
+LIMIT 10
+Execution Time: 2.244 ms
+
+IVFFlat
+Index Scan using idx02_items_bench_ivfflat_cosine
+    ↓
+LIMIT 10
+Execution Time: 5.325 ms
+```
+
+Under this benchmark configuration, both ANN indexes reduced Top-K search time substantially compared with the no-index scan. HNSW was the fastest in this specific 100,000-row, 3-dimensional test. These timings are experiment-specific and should not be generalized across different vector dimensions, dataset sizes, hardware, or ANN tuning parameters.
 
 ## Current Progress
 
@@ -30,7 +81,7 @@ HNSW and IVFFlat will be tested sequentially so that each execution plan and exe
 - [x] Compare L2 distance and cosine distance
 - [x] Create and test HNSW index
 - [x] Create and test IVFFlat index
-- [ ] Compare search performance with and without indexes
+- [x] Compare search performance with and without indexes
 
 ## 1. Enable pgvector
 
@@ -157,7 +208,7 @@ CREATE INDEX item_embedding_hnsw_l2_idx ON items USING hnsw (embedding vector_l2
 
 ### Execution plan verification
 
-The sample dataset is intentionally minimal, so `enable_seqscan = off` was used only to verify index access paths. Performance benchmarking is handled separately with a larger dataset.
+The sample dataset is intentionally minimal, so `enable_seqscan = off` was used only to verify index access paths. Performance benchmarking was performed separately with 100,000 vectors under normal planner settings.
 
 Cosine:
 
@@ -171,12 +222,6 @@ L2:
 ```text
 Index Scan using item_embedding_hnsw_l2_idx
 Order By: (embedding <-> '[1,0,0]'::vector)
-```
-
-The diagnostic setting was restored after verification:
-
-```sql
-SET enable_seqscan = on;
 ```
 
 ## 8. IVFFlat Index
@@ -211,7 +256,7 @@ CREATE INDEX item_embedding_ivfflat_cosine_idx ON items USING ivfflat (embedding
 CREATE INDEX item_embedding_ivfflat_l2_idx ON items USING ivfflat (embedding vector_l2_ops) WITH (lists = 2);
 ```
 
-Search configuration used in the lab:
+Search configuration used in the functional lab:
 
 ```sql
 SET ivfflat.probes = 1;
@@ -225,31 +270,6 @@ lists = 2, probes = 1
 -> search 1 list per query
 ```
 
-### Execution plan verification
-
-As with HNSW, `enable_seqscan = off` was used only to verify the expected index access paths on the minimal sample dataset.
-
-L2:
-
-```text
-Index Scan using item_embedding_ivfflat_l2_idx
-Order By: (embedding <-> '[1,0,0]'::vector)
-```
-
-Cosine:
-
-```text
-Index Scan using item_embedding_ivfflat_cosine_idx
-Order By: (embedding <=> '[1,0,0]'::vector)
-```
-
-Operator-to-index mapping verified in the lab:
-
-```text
-<-> L2     -> item_embedding_ivfflat_l2_idx
-<=> Cosine -> item_embedding_ivfflat_cosine_idx
-```
-
 ### HNSW vs IVFFlat
 
 | | HNSW | IVFFlat |
@@ -260,24 +280,28 @@ Operator-to-index mapping verified in the lab:
 | Main search tuning | `ef_search` | `probes` |
 | Main build/layout tuning | graph parameters | `lists` |
 
-The current dataset is used for functional verification only. Performance benchmarking will use a larger vector dataset.
-
 ## Key Takeaways
 
 ```text
-Vector Search
-    ↓
-Distance metric
-    ↓
-Top-K nearest neighbors
-    ↓
-ANN index
-       ├─ HNSW    : neighbor graph traversal
-       └─ IVFFlat : partition-based search
+PostgreSQL + pgvector
+        ↓
+Store vector data
+        ↓
+Choose distance metric
+   ├─ L2
+   └─ Cosine
+        ↓
+Top-K similarity search
+        ↓
+ANN index for scale
+   ├─ HNSW
+   └─ IVFFlat
+        ↓
+Verify with execution plans and benchmark
 ```
 
-This pattern will later be used in RAG to retrieve relevant document chunks for a question.
+Phase 1 demonstrated how PostgreSQL can store vectors, perform similarity search, and use ANN indexes to accelerate Top-K retrieval. This becomes the retrieval foundation for Phase 2 RAG.
 
-## Next
+## Next — Phase 2: RAG
 
-Generate a larger vector dataset and benchmark no-index, HNSW, and IVFFlat search performance.
+Use pgvector as the retrieval layer for a small RAG pipeline based on DB operations documents/runbooks.
