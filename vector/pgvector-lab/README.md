@@ -11,7 +11,7 @@ PostgreSQL + pgvector hands-on lab for vector storage, similarity search, indexi
 - [x] Run basic vector similarity search
 - [x] Compare L2 distance and cosine distance
 - [x] Create and test HNSW index
-- [ ] Create and test IVFFlat index
+- [x] Create and test IVFFlat index
 - [ ] Compare search performance with and without indexes
 
 ## 1. Enable pgvector
@@ -123,34 +123,9 @@ HNSW is a special index designed for nearest-neighbor search over vector data.
 >
 > **B-tree is mainly for equality/range search, while HNSW is for nearest-neighbor search.**
 
-### Why is a separate vector index needed?
+### HNSW search idea
 
-A normal PostgreSQL B-tree index is well suited to queries such as:
-
-```sql
-WHERE id = 100
-WHERE created_at > ...
-```
-
-Vector search asks a different question:
-
-```text
-"Find the 10 vectors nearest to this query vector."
-```
-
-Without a vector index, PostgreSQL can calculate the distance between the query vector and stored vectors, sort the results, and return the Top-K. As the number of vectors grows, comparing against many rows becomes expensive.
-
-HNSW provides an index structure designed specifically for this nearest-neighbor problem.
-
-### HNSW
-
-HNSW stands for:
-
-```text
-Hierarchical Navigable Small World
-```
-
-Conceptually, it organizes vectors as a graph-like structure in which nearby vectors are connected. During a search, it navigates promising neighbors instead of exhaustively comparing every stored vector.
+HNSW stands for `Hierarchical Navigable Small World`. Conceptually, it organizes vectors as a graph-like structure in which nearby vectors are connected. During a search, it navigates promising neighbors instead of exhaustively comparing every stored vector.
 
 ```text
 Full comparison
@@ -160,13 +135,11 @@ HNSW
 Query -> navigate promising neighbors -> Top-K candidates
 ```
 
-HNSW is an **ANN (Approximate Nearest Neighbor)** index. The goal is to obtain very good nearest-neighbor results much faster at large scale, with a trade-off between search speed and recall.
+HNSW is an **ANN (Approximate Nearest Neighbor)** index.
 
 ### HNSW is not limited to Cosine and L2
 
-HNSW is the **index structure**, while the operator class defines **how vector closeness is measured**. Cosine and L2 are only the two metrics used first in this lab.
-
-For pgvector's `vector` type, HNSW supports these main distance/operator classes:
+HNSW is the **index structure**, while the operator class defines **how vector closeness is measured**.
 
 | Metric | Operator | HNSW operator class |
 |---|---|---|
@@ -175,36 +148,120 @@ For pgvector's `vector` type, HNSW supports these main distance/operator classes
 | Cosine distance | `<=>` | `vector_cosine_ops` |
 | L1 (Manhattan) distance | `<+>` | `vector_l1_ops` |
 
-Mental model:
-
-```text
-HNSW = How to search nearest neighbors efficiently
-
-        + L2              -> vector_l2_ops
-        + Cosine          -> vector_cosine_ops
-        + Inner Product   -> vector_ip_ops
-        + L1              -> vector_l1_ops
-```
-
 The lab focuses on **Cosine and L2** rather than expanding into every metric.
 
 ### Create Cosine and L2 HNSW indexes
 
-Cosine:
-
 ```sql
 CREATE INDEX item_embedding_hnsw_cosine_idx ON items USING hnsw (embedding vector_cosine_ops);
-```
-
-L2:
-
-```sql
 CREATE INDEX item_embedding_hnsw_l2_idx ON items USING hnsw (embedding vector_l2_ops);
 ```
 
-### Execution plan experiment
+### HNSW execution plan experiment
 
-The current `items` table has only 4 rows. With normal planner settings, PostgreSQL correctly judged that scanning four rows was cheaper than traversing an index.
+With only four rows, PostgreSQL chose `Seq Scan -> Sort -> Limit`. For diagnostic purposes, sequential scans were temporarily disabled with `SET enable_seqscan = off;`.
+
+Cosine then used:
+
+```text
+Index Scan using item_embedding_hnsw_cosine_idx
+Order By: (embedding <=> '[1,0,0]'::vector)
+```
+
+L2 used:
+
+```text
+Index Scan using item_embedding_hnsw_l2_idx
+Order By: (embedding <-> '[1,0,0]'::vector)
+```
+
+After the experiment:
+
+```sql
+SET enable_seqscan = on;
+```
+
+`enable_seqscan = off` is used here only as a diagnostic technique, not as performance tuning.
+
+## 8. IVFFlat Index
+
+IVFFlat is also an **ANN (Approximate Nearest Neighbor)** vector index, but its search strategy is different from HNSW.
+
+> **HNSW navigates connections between nearby vectors.**
+>
+> **IVFFlat divides the vector space into lists and searches only selected lists.**
+
+Conceptually:
+
+```text
+All vectors
+    ↓
+Divide into lists (groups)
+    ↓
+Query Vector
+    ↓
+Choose nearby list(s)
+    ↓
+Compare vectors inside selected list(s)
+    ↓
+Top-K
+```
+
+### `lists` and `probes`
+
+Two important IVFFlat settings are:
+
+```text
+lists  = how many groups the vector space is divided into
+probes = how many of those groups are searched for a query
+```
+
+Searching fewer lists can be faster but can miss relevant neighbors. Searching more lists can improve recall but requires more work.
+
+For this small lab, the indexes were created with two lists:
+
+```sql
+CREATE INDEX item_embedding_ivfflat_cosine_idx ON items USING ivfflat (embedding vector_cosine_ops) WITH (lists = 2);
+CREATE INDEX item_embedding_ivfflat_l2_idx ON items USING ivfflat (embedding vector_l2_ops) WITH (lists = 2);
+```
+
+The search was configured to probe one list:
+
+```sql
+SET ivfflat.probes = 1;
+```
+
+### IVFFlat execution plan experiment
+
+As with HNSW, the four-row table was too small for PostgreSQL to prefer an index under normal planner settings.
+
+Normal plan:
+
+```text
+Limit
+  -> Sort
+       -> Seq Scan on items
+```
+
+For diagnostic verification:
+
+```sql
+SET enable_seqscan = off;
+```
+
+L2 query:
+
+```sql
+EXPLAIN SELECT name, embedding <-> '[1,0,0]' AS distance FROM items ORDER BY embedding <-> '[1,0,0]' LIMIT 2;
+```
+
+Observed plan:
+
+```text
+Limit
+  -> Index Scan using item_embedding_ivfflat_l2_idx on items
+       Order By: (embedding <-> '[1,0,0]'::vector)
+```
 
 Cosine query:
 
@@ -216,89 +273,50 @@ Observed plan:
 
 ```text
 Limit
-  -> Sort
-       Sort Key: (embedding <=> '[1,0,0]'::vector)
-       -> Seq Scan on items
-```
-
-This does **not** mean the HNSW index is invalid. It means the PostgreSQL planner estimated that a sequential scan was cheaper for a four-row table.
-
-For diagnostic purposes only, sequential scans were disabled temporarily:
-
-```sql
-SET enable_seqscan = off;
-```
-
-The same Cosine query then used the Cosine HNSW index:
-
-```text
-Limit
-  -> Index Scan using item_embedding_hnsw_cosine_idx on items
+  -> Index Scan using item_embedding_ivfflat_cosine_idx on items
        Order By: (embedding <=> '[1,0,0]'::vector)
 ```
 
-The L2 query also selected the matching L2 HNSW index:
-
-```sql
-EXPLAIN SELECT name, embedding <-> '[1,0,0]' AS distance FROM items ORDER BY embedding <-> '[1,0,0]' LIMIT 2;
-```
-
-Observed plan:
+This confirms that the distance operator is matched to the corresponding IVFFlat operator class/index:
 
 ```text
-Limit
-  -> Index Scan using item_embedding_hnsw_l2_idx on items
-       Order By: (embedding <-> '[1,0,0]'::vector)
+<-> L2     -> item_embedding_ivfflat_l2_idx
+<=> Cosine -> item_embedding_ivfflat_cosine_idx
 ```
 
-This confirms the relationship between the distance operator and the HNSW operator class:
-
-```text
-<=> Cosine -> item_embedding_hnsw_cosine_idx
-<-> L2     -> item_embedding_hnsw_l2_idx
-```
-
-After the diagnostic experiment, restore the normal planner setting:
+Restore the normal planner setting after the diagnostic experiment:
 
 ```sql
 SET enable_seqscan = on;
 ```
 
-`enable_seqscan = off` is **not a performance tuning technique**. It was used here only to verify that PostgreSQL could use the newly created HNSW indexes. A proper performance comparison will use a larger dataset and allow the planner to choose the access path normally.
+### HNSW vs IVFFlat mental model
+
+| | HNSW | IVFFlat |
+|---|---|---|
+| Search idea | Navigate nearby-vector connections | Search selected vector groups |
+| Structure | Graph-like | Lists / clusters |
+| ANN | Yes | Yes |
+| Main search tuning | `ef_search` | `probes` |
+| Main build/layout tuning | graph parameters | `lists` |
+
+The current four-row dataset is enough to verify index creation and execution-plan compatibility, but it is **not sufficient for a meaningful performance comparison**.
 
 ## Key Takeaways
 
-### L2 vs Cosine
-
-| Metric | pgvector operator | Main idea |
-|---|---|---|
-| L2 distance | `<->` | How far apart are the vectors? |
-| Cosine distance | `<=>` | How different are their directions? |
-
-### Similarity Search
-
-Vector similarity search usually means finding the nearest vectors rather than requiring an exact match.
-
 ```text
-Query Vector
+Vector Search
     ↓
-Distance Calculation
+Distance metric
     ↓
-ORDER BY distance
+Top-K nearest neighbors
     ↓
-LIMIT K
-    ↓
-Top-K nearest vectors
+Vector index for scale
+       ├─ HNSW    : navigate neighbor connections
+       └─ IVFFlat : search selected vector groups
 ```
 
-### Index mental model
-
-```text
-B-tree -> equality / range search
-HNSW   -> nearest-neighbor vector search
-```
-
-### Planner lesson from the lab
+And from the PostgreSQL planner perspective:
 
 ```text
 Index exists != PostgreSQL must use the index
@@ -307,11 +325,11 @@ Small table
 -> Seq Scan can be cheaper
 
 Large vector dataset + Top-K search
--> Vector index becomes useful
+-> Vector indexes become useful
 ```
 
 This pattern will later be used in RAG to retrieve the most relevant document chunks for a question.
 
 ## Next
 
-Create and test an IVFFlat index, then compare vector-search performance with and without indexes on a larger dataset.
+Generate a larger vector dataset and compare search performance with no vector index, HNSW, and IVFFlat under normal PostgreSQL planner behavior.
