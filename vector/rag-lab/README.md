@@ -136,7 +136,8 @@ ORDER BY embedding <=> query_embedding
 LIMIT 3;
 ```
 
-이 부분이 Phase 1에서 실습한 **Vector Similarity Search를 실제 문서 검색에 사용하는 지점임.**
+> [!IMPORTANT]
+> **Phase 1에서 실습한 Vector Similarity Search를 실제 문서 검색에 사용하는 지점임.**
 
 ```text
 질문 Embedding
