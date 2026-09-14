@@ -189,7 +189,7 @@ lists = 2, probes = 1
 
 ## 9. Performance Benchmark — 100,000 Vectors
 
-After the four-row functional tests, a separate benchmark table was created with 100,000 random vectors. The performance test was then run under normal PostgreSQL planner behavior without forcing an access path.
+After the four-row functional tests, a separate benchmark table was created with 100,000 random vectors. The performance test was run under normal PostgreSQL planner behavior without forcing an access path.
 
 ### Create benchmark dataset
 
@@ -205,11 +205,7 @@ INSERT INTO items_bench (embedding) SELECT ARRAY[random(), random(), random()]::
 SELECT count(*) FROM items_bench;
 ```
 
-Expected row count:
-
-```text
-100000
-```
+Expected row count: `100000`
 
 ### Benchmark flow
 
@@ -231,18 +227,9 @@ The same Cosine Top-K query was used for every measurement:
 EXPLAIN ANALYZE SELECT id, embedding <=> '[0.5,0.5,0.5]' AS distance FROM items_bench ORDER BY embedding <=> '[0.5,0.5,0.5]' LIMIT 10;
 ```
 
-Benchmark conditions:
-
-- Dataset: 100,000 random `vector(3)` rows
-- Distance: Cosine (`<=>`)
-- Query vector: `[0.5,0.5,0.5]`
-- Top-K: 10
-- PostgreSQL planner: normal behavior, no forced scan path
-- IVFFlat benchmark: `lists = 100`, `probes = 10`
+Benchmark conditions: 100,000 random `vector(3)` rows, Cosine (`<=>`), query vector `[0.5,0.5,0.5]`, Top-K 10, normal PostgreSQL planner behavior. IVFFlat was tested with `lists = 100`, `probes = 10`.
 
 ### No Index
-
-Observed execution path:
 
 ```text
 Seq Scan on items_bench (100,000 rows)
@@ -250,13 +237,10 @@ Seq Scan on items_bench (100,000 rows)
 top-N heapsort
     ↓
 LIMIT 10
+Execution Time: 31.350 ms
 ```
 
-Execution Time:
-
-```text
-31.350 ms
-```
+![No Index benchmark execution plan](images/benchmark-no-index.png)
 
 ### HNSW
 
@@ -264,19 +248,14 @@ Execution Time:
 CREATE INDEX idx01_items_bench_hnsw_cosine ON items_bench USING hnsw (embedding vector_cosine_ops);
 ```
 
-Observed execution path:
-
 ```text
 Index Scan using idx01_items_bench_hnsw_cosine
     ↓
 LIMIT 10
+Execution Time: 2.244 ms
 ```
 
-Execution Time:
-
-```text
-2.244 ms
-```
+![HNSW benchmark execution plan](images/benchmark-hnsw.png)
 
 ### IVFFlat
 
@@ -294,19 +273,14 @@ CREATE INDEX idx02_items_bench_ivfflat_cosine ON items_bench USING ivfflat (embe
 SET ivfflat.probes = 10;
 ```
 
-Observed execution path:
-
 ```text
 Index Scan using idx02_items_bench_ivfflat_cosine
     ↓
 LIMIT 10
+Execution Time: 5.325 ms
 ```
 
-Execution Time:
-
-```text
-5.325 ms
-```
+![IVFFlat benchmark execution plan](images/benchmark-ivfflat.png)
 
 ### Results
 
