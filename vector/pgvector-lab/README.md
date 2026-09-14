@@ -10,7 +10,7 @@ PostgreSQL + pgvector hands-on lab for vector storage, similarity search, indexi
 - [x] Store sample vectors
 - [x] Run basic vector similarity search
 - [x] Compare L2 distance and cosine distance
-- [ ] Create and test HNSW index
+- [x] Create and test HNSW index
 - [ ] Create and test IVFFlat index
 - [ ] Compare search performance with and without indexes
 
@@ -115,7 +115,7 @@ A threshold search is different. It filters by a maximum acceptable distance:
 SELECT name, embedding <=> '[1,0,0]' AS distance FROM items WHERE embedding <=> '[1,0,0]' < 0.1 ORDER BY embedding <=> '[1,0,0]';
 ```
 
-## 7. HNSW Index - Concept
+## 7. HNSW Index
 
 HNSW is a special index designed for nearest-neighbor search over vector data.
 
@@ -186,35 +186,85 @@ HNSW = How to search nearest neighbors efficiently
         + L1              -> vector_l1_ops
 ```
 
-The lab will focus on **Cosine and L2** rather than expanding into every metric. Inner Product and L1 are documented here to make it clear that HNSW itself is not a Cosine/L2-only index.
+The lab focuses on **Cosine and L2** rather than expanding into every metric.
 
-### Distance metric and operator class examples
+### Create Cosine and L2 HNSW indexes
 
-Cosine distance:
-
-```sql
-CREATE INDEX items_embedding_hnsw_cosine_idx ON items USING hnsw (embedding vector_cosine_ops);
-```
-
-Used with:
+Cosine:
 
 ```sql
-ORDER BY embedding <=> query_vector
+CREATE INDEX item_embedding_hnsw_cosine_idx ON items USING hnsw (embedding vector_cosine_ops);
 ```
 
-L2 distance:
+L2:
 
 ```sql
-CREATE INDEX items_embedding_hnsw_l2_idx ON items USING hnsw (embedding vector_l2_ops);
+CREATE INDEX item_embedding_hnsw_l2_idx ON items USING hnsw (embedding vector_l2_ops);
 ```
 
-Used with:
+### Execution plan experiment
+
+The current `items` table has only 4 rows. With normal planner settings, PostgreSQL correctly judged that scanning four rows was cheaper than traversing an index.
+
+Cosine query:
 
 ```sql
-ORDER BY embedding <-> query_vector
+EXPLAIN SELECT name, embedding <=> '[1,0,0]' AS distance FROM items ORDER BY embedding <=> '[1,0,0]' LIMIT 2;
 ```
 
-The actual HNSW index creation/search experiment is the next lab step. The current `items` table is very small, so it is not suitable for demonstrating a meaningful performance improvement yet.
+Observed plan:
+
+```text
+Limit
+  -> Sort
+       Sort Key: (embedding <=> '[1,0,0]'::vector)
+       -> Seq Scan on items
+```
+
+This does **not** mean the HNSW index is invalid. It means the PostgreSQL planner estimated that a sequential scan was cheaper for a four-row table.
+
+For diagnostic purposes only, sequential scans were disabled temporarily:
+
+```sql
+SET enable_seqscan = off;
+```
+
+The same Cosine query then used the Cosine HNSW index:
+
+```text
+Limit
+  -> Index Scan using item_embedding_hnsw_cosine_idx on items
+       Order By: (embedding <=> '[1,0,0]'::vector)
+```
+
+The L2 query also selected the matching L2 HNSW index:
+
+```sql
+EXPLAIN SELECT name, embedding <-> '[1,0,0]' AS distance FROM items ORDER BY embedding <-> '[1,0,0]' LIMIT 2;
+```
+
+Observed plan:
+
+```text
+Limit
+  -> Index Scan using item_embedding_hnsw_l2_idx on items
+       Order By: (embedding <-> '[1,0,0]'::vector)
+```
+
+This confirms the relationship between the distance operator and the HNSW operator class:
+
+```text
+<=> Cosine -> item_embedding_hnsw_cosine_idx
+<-> L2     -> item_embedding_hnsw_l2_idx
+```
+
+After the diagnostic experiment, restore the normal planner setting:
+
+```sql
+SET enable_seqscan = on;
+```
+
+`enable_seqscan = off` is **not a performance tuning technique**. It was used here only to verify that PostgreSQL could use the newly created HNSW indexes. A proper performance comparison will use a larger dataset and allow the planner to choose the access path normally.
 
 ## Key Takeaways
 
@@ -248,8 +298,20 @@ B-tree -> equality / range search
 HNSW   -> nearest-neighbor vector search
 ```
 
+### Planner lesson from the lab
+
+```text
+Index exists != PostgreSQL must use the index
+
+Small table
+-> Seq Scan can be cheaper
+
+Large vector dataset + Top-K search
+-> Vector index becomes useful
+```
+
 This pattern will later be used in RAG to retrieve the most relevant document chunks for a question.
 
 ## Next
 
-Create the HNSW index, run vector searches, and inspect the execution plan with `EXPLAIN`.
+Create and test an IVFFlat index, then compare vector-search performance with and without indexes on a larger dataset.
