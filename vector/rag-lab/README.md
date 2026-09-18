@@ -123,6 +123,30 @@ connection-spike.md 대응          4           Connection 증가 원인을...
 
 현재 Runbook은 짧고 구조가 명확하므로 섹션 기반 Chunking으로 시작함. 이후 문서가 길어지면 Token 길이, Chunk overlap 등의 방법이 필요한 시점에 확장함.
 
+### Chunking 구현 및 실행 결과
+
+`src/ingest.py`에서 Runbook Markdown 파일을 읽고, `## `로 시작하는 섹션 제목을 기준으로 Chunk를 분리하도록 구현함.
+
+```text
+connection-spike.md
+        ↓
+   ingest.py
+        ↓
+Markdown ## 기준 분리
+        ↓
+Chunk 1 : 증상
+Chunk 2 : 확인 항목
+Chunk 3 : 가능한 원인
+Chunk 4 : 대응
+```
+
+문서를 한 줄씩 읽으면서 새로운 `## ` 섹션을 만나면 이전 섹션의 내용을 하나의 Chunk로 확정함. 각 Chunk에는 이후 `rag_documents`에 저장할 수 있도록 `source`, `section`, `chunk_no`, `content` 정보를 연결할 수 있음.
+
+`connection-spike.md`를 대상으로 실행하여 **증상 / 확인 항목 / 가능한 원인 / 대응의 총 4개 Chunk가 정상적으로 출력되는 것을 확인함.**
+
+> [!IMPORTANT]
+> **문서 구조를 기준으로 실제 Chunk를 생성하는 코드까지 구현했으며, 다음 단계에서는 각 Chunk의 `content`를 Embedding으로 변환함.**
+
 예시 문장:
 
 ```text
