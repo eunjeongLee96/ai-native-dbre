@@ -9,8 +9,8 @@ DB 운영 문서를 기반으로 질문에 답하는 작은 RAG를 직접 구현
 ## 진행 순서
 
 - [x] 1. RAG 전체 구조 이해
-- [ ] 2. 테스트용 DB 운영 문서 / Runbook 준비
-- [ ] 3. 문서를 Chunk로 분리
+- [x] 2. 테스트용 DB 운영 문서 / Runbook 준비
+- [x] 3. 문서를 Chunk로 분리
 - [ ] 4. Chunk를 Embedding으로 변환
 - [ ] 5. Embedding을 pgvector에 저장
 - [ ] 6. 질문을 Embedding으로 변환
@@ -79,6 +79,49 @@ PostgreSQL + pgvector 저장
 ```
 
 긴 문서를 검색하기 좋은 작은 단위인 Chunk로 나눈 뒤, 각 Chunk를 Embedding 모델에 전달하여 숫자 벡터로 변환함.
+
+### 이번 Lab의 Chunk 분리 기준
+
+현재 Prototype에서는 PostgreSQL Runbook 3개(`connection-spike.md`, `slow-sql.md`, `lock-wait.md`)를 검색 대상으로 사용함.
+
+처음부터 Token 수를 계산하는 복잡한 Chunking을 적용하지 않고, **Runbook의 Markdown 섹션을 하나의 의미 단위로 보고 Chunk로 분리함.** 문서 구조 자체가 증상, 확인 항목, 가능한 원인, 대응처럼 의미별로 나뉘어 있으므로 첫 RAG 실험에서 검색 결과를 이해하기 쉬움.
+
+예를 들어 `connection-spike.md`는 다음과 같이 분리함.
+
+```text
+connection-spike.md
+    │
+    ├─ Chunk 1 : 증상
+    │    └─ Connection 수가 갑자기 증가한 상태와 영향
+    │
+    ├─ Chunk 2 : 확인 항목
+    │    └─ pg_stat_activity, Application별 Connection,
+    │       idle in transaction, 최근 변경 사항 확인
+    │
+    ├─ Chunk 3 : 가능한 원인
+    │    └─ Batch, Connection Pool, Retry, 미종료 Transaction
+    │
+    └─ Chunk 4 : 대응
+         └─ 원인 확인 후 조치하며 Session 종료는 DBA 승인 후 수행
+```
+
+각 Chunk에는 검색 결과를 추적할 수 있도록 원본 파일과 섹션 정보를 함께 저장할 예정임.
+
+```text
+source              section       chunk_no    content
+-----------------------------------------------------------------
+connection-spike.md 증상          1           평소보다 PostgreSQL...
+connection-spike.md 확인 항목     2           현재 Connection 상태를...
+connection-spike.md 가능한 원인   3           Batch 작업에서...
+connection-spike.md 대응          4           Connection 증가 원인을...
+```
+
+`slow-sql.md`와 `lock-wait.md`도 동일하게 **증상 / 확인 항목 / 가능한 원인 / 대응** 섹션을 기준으로 Chunk를 생성함.
+
+> [!IMPORTANT]
+> **Chunking의 목적은 문서를 단순히 일정 길이로 자르는 것이 아니라, 사용자 질문과 관련된 내용을 의미 단위로 더 정확하게 검색할 수 있도록 나누는 것임.**
+
+현재 Runbook은 짧고 구조가 명확하므로 섹션 기반 Chunking으로 시작함. 이후 문서가 길어지면 Token 길이, Chunk overlap 등의 방법이 필요한 시점에 확장함.
 
 예시 문장:
 
