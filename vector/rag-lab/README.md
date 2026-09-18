@@ -80,11 +80,33 @@ PostgreSQL + pgvector 저장
 
 긴 문서를 검색하기 좋은 작은 단위인 Chunk로 나눈 뒤, 각 Chunk를 Embedding 모델에 전달하여 숫자 벡터로 변환함.
 
-### 이번 Lab의 Chunk 분리 기준
+## 2. 테스트용 DB 운영 Runbook 준비
 
-현재 Prototype에서는 PostgreSQL Runbook 3개(`connection-spike.md`, `slow-sql.md`, `lock-wait.md`)를 검색 대상으로 사용함.
+현재 Prototype은 PostgreSQL을 기준으로 구현하며, RAG 검색에 사용할 장애 대응 Runbook 3개를 준비함.
 
-처음부터 Token 수를 계산하는 복잡한 Chunking을 적용하지 않고, **Runbook의 Markdown 섹션을 하나의 의미 단위로 보고 Chunk로 분리함.** 문서 구조 자체가 증상, 확인 항목, 가능한 원인, 대응처럼 의미별로 나뉘어 있으므로 첫 RAG 실험에서 검색 결과를 이해하기 쉬움.
+```text
+runbooks/
+├── connection-spike.md
+├── slow-sql.md
+└── lock-wait.md
+```
+
+세 Runbook 모두 **증상 → 확인 항목 → 가능한 원인 → 대응** 구조로 작성함. 단순 예제 문장이 아니라 이후 DBRE Agent가 장애 상황에서 검색할 운영 지식으로 사용하기 위한 문서임.
+
+- `connection-spike.md`: Connection 급증 시 상태 확인, 가능한 원인, Session 종료 시 승인 원칙 등을 정리함.
+- `slow-sql.md`: 장시간 실행 SQL, Lock Wait, 실행 계획, Index 및 통계 변경 등을 확인하는 흐름을 정리함.
+- `lock-wait.md`: Lock 대기와 Blocking 관계를 확인하고, Session 종료나 Rollback을 자동 수행하지 않는 원칙을 정리함.
+
+> [!NOTE]
+> **현재 Lab은 PostgreSQL을 기준으로 Prototype을 구현함. RAG → DB Tools → Agent 전체 흐름을 먼저 완성한 후 MySQL, Oracle 등 다른 DBMS로 확장하는 것을 목표로 함.**
+
+---
+
+## 3. 문서를 Chunk로 분리
+
+처음부터 Token 수를 계산하는 복잡한 Chunking을 적용하지 않고, **Runbook의 Markdown 섹션을 하나의 의미 단위로 보고 Chunk로 분리함.**
+
+현재 Runbook의 구조가 증상, 확인 항목, 가능한 원인, 대응처럼 의미별로 나뉘어 있으므로 각 `##` 섹션을 하나의 Chunk로 사용함.
 
 예를 들어 `connection-spike.md`는 다음과 같이 분리함.
 
@@ -92,60 +114,103 @@ PostgreSQL + pgvector 저장
 connection-spike.md
     │
     ├─ Chunk 1 : 증상
-    │    └─ Connection 수가 갑자기 증가한 상태와 영향
-    │
     ├─ Chunk 2 : 확인 항목
-    │    └─ pg_stat_activity, Application별 Connection,
-    │       idle in transaction, 최근 변경 사항 확인
-    │
     ├─ Chunk 3 : 가능한 원인
-    │    └─ Batch, Connection Pool, Retry, 미종료 Transaction
-    │
     └─ Chunk 4 : 대응
-         └─ 원인 확인 후 조치하며 Session 종료는 DBA 승인 후 수행
 ```
-
-각 Chunk에는 검색 결과를 추적할 수 있도록 원본 파일과 섹션 정보를 함께 저장할 예정임.
-
-```text
-source              section       chunk_no    content
------------------------------------------------------------------
-connection-spike.md 증상          1           평소보다 PostgreSQL...
-connection-spike.md 확인 항목     2           현재 Connection 상태를...
-connection-spike.md 가능한 원인   3           Batch 작업에서...
-connection-spike.md 대응          4           Connection 증가 원인을...
-```
-
-`slow-sql.md`와 `lock-wait.md`도 동일하게 **증상 / 확인 항목 / 가능한 원인 / 대응** 섹션을 기준으로 Chunk를 생성함.
 
 > [!IMPORTANT]
 > **Chunking의 목적은 문서를 단순히 일정 길이로 자르는 것이 아니라, 사용자 질문과 관련된 내용을 의미 단위로 더 정확하게 검색할 수 있도록 나누는 것임.**
 
-현재 Runbook은 짧고 구조가 명확하므로 섹션 기반 Chunking으로 시작함. 이후 문서가 길어지면 Token 길이, Chunk overlap 등의 방법이 필요한 시점에 확장함.
+### `src/ingest.py` 구현
 
-### Chunking 구현 및 실행 결과
+Runbook 파일을 읽는 함수부터 작성함.
 
-`src/ingest.py`에서 Runbook Markdown 파일을 읽고, `## `로 시작하는 섹션 제목을 기준으로 Chunk를 분리하도록 구현함.
+```python
+def load_runbook(file_path):
+    """Markdown 파일을 읽음."""
+    return file_path.read_text(encoding="utf-8")
+```
+
+읽어 온 Markdown을 한 줄씩 확인하면서 `## `로 시작하는 새로운 Section을 만나면 이전 Section을 하나의 Chunk로 확정함.
+
+```python
+def split_into_chunks(content):
+    """Markdown의 ## 섹션을 기준으로 Chunk를 생성함."""
+
+    chunks = []
+
+    current_section = None
+    current_lines = []
+
+    for line in content.splitlines():
+
+        if line.startswith("## "):
+
+            if current_section is not None:
+                chunks.append({
+                    "section": current_section,
+                    "content": "\\n".join(current_lines).strip()
+                })
+
+            current_section = line.replace("## ", "").strip()
+            current_lines = []
+
+        elif current_section is not None:
+            current_lines.append(line)
+
+    if current_section is not None:
+        chunks.append({
+            "section": current_section,
+            "content": "\\n".join(current_lines).strip()
+        })
+
+    return chunks
+```
+
+생성된 Chunk를 확인하기 위해 `connection-spike.md`를 읽어 Chunk 번호, 원본 파일, Section, Content를 출력함.
+
+```python
+file_path = RUNBOOK_DIR / "connection-spike.md"
+
+content = load_runbook(file_path)
+chunks = split_into_chunks(content)
+
+for chunk_no, chunk in enumerate(chunks, start=1):
+    print("=" * 60)
+    print(f"Chunk No : {chunk_no}")
+    print(f"Source   : {file_path.name}")
+    print(f"Section  : {chunk['section']}")
+    print("-" * 60)
+    print(chunk["content"])
+    print()
+```
+
+실행 결과 `connection-spike.md`가 의도한 대로 4개 Chunk로 분리되는 것을 확인함.
 
 ```text
-connection-spike.md
-        ↓
-   ingest.py
-        ↓
-Markdown ## 기준 분리
-        ↓
 Chunk 1 : 증상
 Chunk 2 : 확인 항목
 Chunk 3 : 가능한 원인
 Chunk 4 : 대응
 ```
 
-문서를 한 줄씩 읽으면서 새로운 `## ` 섹션을 만나면 이전 섹션의 내용을 하나의 Chunk로 확정함. 각 Chunk에는 이후 `rag_documents`에 저장할 수 있도록 `source`, `section`, `chunk_no`, `content` 정보를 연결할 수 있음.
+각 Chunk는 이후 PostgreSQL의 `rag_documents`에 다음 형태로 연결할 예정임.
 
-`connection-spike.md`를 대상으로 실행하여 **증상 / 확인 항목 / 가능한 원인 / 대응의 총 4개 Chunk가 정상적으로 출력되는 것을 확인함.**
+```text
+Python Chunk                  rag_documents
+─────────────────────────────────────────────
+file_path.name       ──────→  source
+chunk['section']     ──────→  section
+chunk_no             ──────→  chunk_no
+chunk['content']     ──────→  content
+                                  embedding
+                                      ↑
+                              다음 단계에서 생성
+```
 
 > [!IMPORTANT]
-> **문서 구조를 기준으로 실제 Chunk를 생성하는 코드까지 구현했으며, 다음 단계에서는 각 Chunk의 `content`를 Embedding으로 변환함.**
+> **Runbook 준비 → Python에서 문서 읽기 → 의미 단위 Chunk 생성까지 실제 코드로 확인함. 다음 단계에서는 각 Chunk의 `content`를 Embedding으로 변환함.**
 
 예시 문장:
 
